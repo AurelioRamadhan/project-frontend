@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useRouter } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { AppShell } from '@/components/layout/app-shell';
 import { useAuthStore } from '@/store/auth';
@@ -52,6 +52,22 @@ const PRIORITY_COLOR: Record<Priority, string> = {
 };
 
 export default function TaskDetailPage() {
+  return (
+    <Suspense
+      fallback={
+        <AppShell>
+          <div className="max-w-5xl mx-auto p-6">
+            <p className="text-slate-400">Memuat task...</p>
+          </div>
+        </AppShell>
+      }
+    >
+      <TaskDetailContent />
+    </Suspense>
+  );
+}
+
+function TaskDetailContent() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const user = useAuthStore((s) => s.user);

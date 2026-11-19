@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useRouter } from 'next/navigation';
-import { useState, useMemo } from 'react';
+import { Suspense, useState, useMemo } from 'react';
 import { api } from '@/lib/api';
 import { AppShell } from '@/components/layout/app-shell';
 import { useAuthStore } from '@/store/auth';
@@ -22,6 +22,14 @@ const COLUMNS: { key: TaskStatus; label: string; accent: string }[] = [
 ];
 
 export default function ProjectDetailPage() {
+  return (
+    <Suspense fallback={<AppShell><p className="p-6 text-slate-400">Memuat project...</p></AppShell>}>
+      <ProjectDetailContent />
+    </Suspense>
+  );
+}
+
+function ProjectDetailContent() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
