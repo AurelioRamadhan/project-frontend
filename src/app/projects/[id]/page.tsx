@@ -2,27 +2,24 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { api } from '@/lib/api';
 import { AppShell } from '@/components/layout/app-shell';
 import { useAuthStore } from '@/store/auth';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog';
-import { Lock, Trash2 } from 'lucide-react';
+import { ProjectDialog } from '@/components/ui/project-dialog';
+import { TaskDialog } from '@/components/ui/task-dialog';
+import { TaskCard } from '@/components/ui/task-card';
+import { Pagination } from '@/components/ui/pagination';
+import { ArrowLeft, Pencil, Plus, Search } from 'lucide-react';
 
-const STATUS_ORDER = ['TODO', 'IN_PROGRESS', 'BLOCKED', 'DONE'] as const;
+type TaskStatus = 'TODO' | 'IN_PROGRESS' | 'DONE';
+const COLUMNS: { key: TaskStatus; label: string; accent: string }[] = [
+  { key: 'TODO', label: 'TO DO', accent: 'border-slate-400' },
+  { key: 'IN_PROGRESS', label: 'IN PROGRESS', accent: 'border-blue-500' },
+  { key: 'DONE', label: 'DONE', accent: 'border-green-500' },
+];
 
 export default function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -31,337 +28,272 @@ export default function ProjectDetailPage() {
   const qc = useQueryClient();
   const isPM = user?.role === 'PM';
 
-  // ---------- Data project ----------
-  const { data: projects } = useQuery({
-    queryKey: ['projects'],
-    queryFn: async () => (await api.get('/api/projects')).data,
-  });
-  const project = projects?.find((p: any) => p.id === id);
+  const [editProject, setEditProject] = useState(false);
+  const [createTask, setCreateTask] = useState(false);
+  const [editTask, setEditTask] = useState<any>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [filterPriority, setFilterPriority] = useState('ALL');
+  const [filterDepartment, setFilterDepartment] = useState('ALL');
+  const [page, setPage] = useState(1);
+  const rows = 20;
 
-  // ---------- Data task ----------
-  const { data: tasks, isLoading: tasksLoading } = useQuery({
-    queryKey: ['tasks', id],
-    queryFn: async () => (await api.get(`/api/tasks/project/${id}`)).data,
+  const { data: projectData } = useQuery({
+    queryKey: ['projects'],
+    queryFn: async () => (await api.get('/api/projects?rows=100')).data,
+  });
+  const project = projectData?.data?.find((p: any) => p.id === id);
+
+  const { data: taskData, isLoading } = useQuery({
+    queryKey: ['tasks', id, page, search, filterPriority, filterDepartment],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      params.set('page', String(page));
+      params.set('rows', String(rows));
+      params.set('orderKey', 'createdAt');
+      params.set('orderRule', 'desc');
+      if (search) params.set('searchFilters', JSON.stringify({ title: search }));
+      const filters: any = {};
+      if (filterPriority !== 'ALL') filters.priority = filterPriority;
+      if (filterDepartment !== 'ALL') filters.department = filterDepartment;
+      if (Object.keys(filters).length) params.set('filters', JSON.stringify(filters));
+      return (await api.get(`/api/tasks/project/${id}?${params.toString()}`)).data;
+    },
     enabled: !!id,
   });
 
-  // ---------- Anggota internal project (untuk pilihan assignee) ----------
-  const members = (project?.members || []).filter(
-    (m: any) => m.user && m.user.role === 'INTERNAL'
-  );
+  const tasks = taskData?.data || [];
+  const meta = taskData?.meta;
 
-  // ---------- Create task form ----------
-  const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({
-    title: '',
-    description: '',
-    department: 'FRONTEND' as 'UIUX' | 'FRONTEND' | 'BACKEND',
-    priority: 'MEDIUM' as 'LOW' | 'MEDIUM' | 'HIGH',
-    assigneeId: '',
-    startDate: '',
-    dueDate: '',
-    isClientVisible: false,
-    dependencyIds: [] as string[],
-  });
-
-  const resetForm = () =>
-    setForm({
-      title: '',
-      description: '',
-      department: 'FRONTEND',
-      priority: 'MEDIUM',
-      assigneeId: '',
-      startDate: '',
-      dueDate: '',
-      isClientVisible: false,
-      dependencyIds: [],
-    });
-
-  const createTask = useMutation({
-    mutationFn: async () => {
-      const payload: any = {
-        title: form.title,
-        description: form.description || undefined,
-        department: form.department,
-        priority: form.priority,
-        isClientVisible: form.isClientVisible,
-        assigneeId: form.assigneeId || undefined,
-        dependencyIds: form.dependencyIds.length ? form.dependencyIds : undefined,
-      };
-      if (form.startDate) payload.startDate = new Date(form.startDate).toISOString();
-      if (form.dueDate) payload.dueDate = new Date(form.dueDate).toISOString();
-      return api.post(`/api/tasks/project/${id}`, payload);
-    },
+  const updateStatus = useMutation({
+    mutationFn: async ({
+      taskId,
+      status,
+      version,
+    }: {
+      taskId: string;
+      status: TaskStatus;
+      version: number;
+    }) => api.patch(`/api/tasks/${taskId}/status`, { status, version }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['tasks', id] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
-      setOpen(false);
-      resetForm();
     },
-    onError: (e: any) => alert(e.response?.data?.error || 'Gagal membuat task'),
+    onError: (e: any) => alert(e.response?.data?.error || 'Gagal ubah status'),
   });
 
-  // ---------- Delete project (soft) ----------
-  const deleteProject = useMutation({
-    mutationFn: async () => api.delete(`/api/projects/${id}`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['projects'] });
-      router.push('/projects');
-    },
-    onError: (e: any) => alert(e.response?.data?.error || 'Gagal menghapus project'),
-  });
+  const handleDrop = (status: TaskStatus) => {
+    if (!dragId) return;
+    const task = tasks.find((t: any) => t.id === dragId);
+    setDragId(null);
+    if (!task || task.status === status) return;
+    if (user?.role !== 'INTERNAL' || task.assigneeId !== user?.id) {
+      alert('Hanya eksekutor yang boleh mengubah status.');
+      return;
+    }
+    if (task.isBlocked) {
+      alert('Task masih blocked.');
+      return;
+    }
+    updateStatus.mutate({ taskId: task.id, status, version: task.version });
+  };
 
-  // ---------- Statistik ----------
-  const all = tasks || [];
-  const done = all.filter((t: any) => t.status === 'DONE').length;
-  const progress = all.length ? Math.round((done / all.length) * 100) : 0;
+  const done = tasks.filter((t: any) => t.status === 'DONE').length;
+  const progress = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
 
-  // Assignee filter per department
-  const assigneeOptions = members.filter(
-    (m: any) => m.user.department === form.department
-  );
+  const editInitial = useMemo(() => {
+    if (!project) return undefined;
+    return {
+      name: project.name,
+      description: project.description || '',
+      startDate: project.startDate ? project.startDate.slice(0, 10) : '',
+      dueDate: project.dueDate ? project.dueDate.slice(0, 10) : '',
+      clientId: project.clientId || '',
+      memberIds: (project.members || []).map((m: any) => m.userId || m.user?.id),
+    };
+  }, [project]);
+
+  const taskEditInitial = useMemo(() => {
+    if (!editTask) return undefined;
+    return {
+      title: editTask.title,
+      description: editTask.description || '',
+      priority: editTask.priority,
+      assigneeId: editTask.assigneeId || '',
+      startDate: editTask.startDate ? editTask.startDate.slice(0, 10) : '',
+      dueDate: editTask.dueDate ? editTask.dueDate.slice(0, 10) : '',
+      isClientVisible: editTask.isClientVisible,
+      dependencyIds: (editTask.dependencies || []).map((d: any) => d.dependsOnTaskId),
+    };
+  }, [editTask]);
+
+  const handleDeleteTask = async (taskId: string) => {
+    if (!confirm('Hapus task ini?')) return;
+    await api.delete(`/api/tasks/${taskId}`);
+    qc.invalidateQueries({ queryKey: ['tasks', id] });
+  };
 
   return (
     <AppShell>
-      <div className="max-w-6xl space-y-6">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4">
+      <div className="max-w-7xl space-y-5">
+        <Button variant="outline" size="sm" onClick={() => router.push('/projects')}>
+          <ArrowLeft size={16} className="mr-1" /> Back
+        </Button>
+
+        <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-3xl font-bold text-slate-900">
-              {project?.name || 'Memuat project...'}
-            </h1>
+            <h1 className="text-3xl font-bold">{project?.name || 'Memuat...'}</h1>
             {project?.description && (
               <p className="text-slate-500 mt-1 max-w-2xl">{project.description}</p>
             )}
             {project?.client && (
-              <p className="text-sm text-slate-400 mt-1">
-                Client: {project.client.name}
-              </p>
+              <p className="text-sm text-slate-400 mt-1">Client: {project.client.name}</p>
             )}
           </div>
           {isPM && project && (
             <div className="flex gap-2">
-              <Dialog open={open} onOpenChange={setOpen}>
-                <DialogTrigger asChild>
-                  <Button>+ Create Task</Button>
-                </DialogTrigger>
-                <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-                  <DialogHeader>
-                    <DialogTitle>Create New Task</DialogTitle>
-                  </DialogHeader>
-                  <div className="space-y-4">
-                    <div>
-                      <Label>Task Title *</Label>
-                      <Input
-                        value={form.title}
-                        onChange={(e) => setForm({ ...form, title: e.target.value })}
-                      />
-                    </div>
-                    <div>
-                      <Label>Description</Label>
-                      <Textarea
-                        rows={3}
-                        value={form.description}
-                        onChange={(e) => setForm({ ...form, description: e.target.value })}
-                      />
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <Label>Department</Label>
-                        <select
-                          className="w-full border rounded-md p-2"
-                          value={form.department}
-                          onChange={(e) =>
-                            setForm({
-                              ...form,
-                              department: e.target.value as any,
-                              assigneeId: '',
-                            })
-                          }
-                        >
-                          <option value="UIUX">UI/UX</option>
-                          <option value="FRONTEND">Frontend</option>
-                          <option value="BACKEND">Backend</option>
-                        </select>
-                      </div>
-                      <div>
-                        <Label>Priority</Label>
-                        <select
-                          className="w-full border rounded-md p-2"
-                          value={form.priority}
-                          onChange={(e) =>
-                            setForm({ ...form, priority: e.target.value as any })
-                          }
-                        >
-                          <option value="LOW">Low</option>
-                          <option value="MEDIUM">Medium</option>
-                          <option value="HIGH">High</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div>
-                      <Label>Assignee</Label>
-                      <select
-                        className="w-full border rounded-md p-2"
-                        value={form.assigneeId}
-                        onChange={(e) => setForm({ ...form, assigneeId: e.target.value })}
-                      >
-                        <option value="">— Pilih assignee —</option>
-                        {assigneeOptions.map((m: any) => (
-                          <option key={m.user.id} value={m.user.id}>
-                            {m.user.name} ({m.user.department})
-                          </option>
-                        ))}
-                      </select>
-                      {assigneeOptions.length === 0 && (
-                        <p className="text-xs text-red-500 mt-1">
-                          Belum ada anggota departemen ini di project.
-                        </p>
-                      )}
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <Label>Start Date</Label>
-                        <Input
-                          type="date"
-                          value={form.startDate}
-                          onChange={(e) => setForm({ ...form, startDate: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <Label>Due Date</Label>
-                        <Input
-                          type="date"
-                          value={form.dueDate}
-                          onChange={(e) => setForm({ ...form, dueDate: e.target.value })}
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <Label>Dependencies (task harus selesai dulu)</Label>
-                      <div className="border rounded-md p-2 max-h-40 overflow-y-auto space-y-1">
-                        {all.length === 0 && (
-                          <p className="text-xs text-slate-400">Belum ada task lain.</p>
-                        )}
-                        {all.map((t: any) => (
-                          <label key={t.id} className="flex items-center gap-2 text-sm">
-                            <input
-                              type="checkbox"
-                              checked={form.dependencyIds.includes(t.id)}
-                              onChange={(e) => {
-                                const set = new Set(form.dependencyIds);
-                                e.target.checked ? set.add(t.id) : set.delete(t.id);
-                                setForm({ ...form, dependencyIds: Array.from(set) });
-                              }}
-                            />
-                            {t.title}
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={form.isClientVisible}
-                        onChange={(e) =>
-                          setForm({ ...form, isClientVisible: e.target.checked })
-                        }
-                      />
-                      Client Visibility (task dapat dilihat client)
-                    </label>
-                    <Button
-                      className="w-full"
-                      disabled={!form.title || createTask.isPending}
-                      onClick={() => createTask.mutate()}
-                    >
-                      {createTask.isPending ? 'Menyimpan...' : 'Simpan Task'}
-                    </Button>
-                  </div>
-                </DialogContent>
-              </Dialog>
-              <Button
-                variant="destructive"
-                onClick={() => {
-                  if (confirm('Hapus project ini (soft delete)?')) deleteProject.mutate();
-                }}
-              >
-                <Trash2 size={16} className="mr-1" /> Hapus
+              <Button variant="outline" onClick={() => setEditProject(true)}>
+                <Pencil size={16} className="mr-1" /> Edit Project
+              </Button>
+              <Button onClick={() => setCreateTask(true)}>
+                <Plus size={16} className="mr-1" /> Create Task
               </Button>
             </div>
           )}
         </div>
 
-        {/* Progress */}
-        <Card>
-          <CardContent className="p-6 space-y-3">
-            <div className="flex justify-between text-sm">
-              <span className="text-slate-600">Project Progress</span>
-              <span className="font-bold">{progress}%</span>
-            </div>
-            <Progress value={progress} />
-            <div className="flex gap-4 text-xs text-slate-500">
-              <span>Total: {all.length} task</span>
-              <span>Selesai: {done}</span>
-              <span>Blocked: {all.filter((t: any) => t.displayStatus === 'BLOCKED').length}</span>
-            </div>
-          </CardContent>
-        </Card>
+        <div className="bg-white border rounded-lg p-4 space-y-3">
+          <div className="flex justify-between text-sm">
+            <span className="text-slate-600">Project Progress</span>
+            <span className="font-bold">{progress}%</span>
+          </div>
+          <Progress value={progress} />
+          <div className="flex gap-4 text-xs text-slate-500">
+            <span>Total: {tasks.length} task</span>
+            <span>Selesai: {done}</span>
+            <span>Blocked: {tasks.filter((t: any) => t.isBlocked).length}</span>
+          </div>
+        </div>
 
-        {/* Task list per status */}
-        {tasksLoading && <p className="text-slate-400">Memuat task...</p>}
-        {!tasksLoading && all.length === 0 && (
-          <p className="text-slate-400">Belum ada task. {isPM && 'Klik "Create Task" untuk menambah.'}</p>
-        )}
+        <div className="flex gap-2 flex-wrap">
+          <div className="flex items-center gap-2 border rounded-md px-3 py-2 bg-white flex-1 min-w-[200px]">
+            <Search size={16} className="text-slate-400" />
+            <input
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
+              placeholder="Search tasks..."
+              className="flex-1 text-sm outline-none"
+            />
+          </div>
+          <select
+            value={filterPriority}
+            onChange={(e) => {
+              setFilterPriority(e.target.value);
+              setPage(1);
+            }}
+            className="border rounded-md px-3 py-2 text-sm bg-white"
+          >
+            <option value="ALL">All Priority</option>
+            <option value="LOW">Low</option>
+            <option value="MEDIUM">Medium</option>
+            <option value="HIGH">High</option>
+          </select>
+          <select
+            value={filterDepartment}
+            onChange={(e) => {
+              setFilterDepartment(e.target.value);
+              setPage(1);
+            }}
+            className="border rounded-md px-3 py-2 text-sm bg-white"
+          >
+            <option value="ALL">All Dept</option>
+            <option value="UIUX">UI/UX</option>
+            <option value="FRONTEND">Frontend</option>
+            <option value="BACKEND">Backend</option>
+          </select>
+        </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {STATUS_ORDER.map((status) => {
-            const items = all.filter((t: any) => (t.displayStatus || t.status) === status);
+        {isLoading && <p className="text-slate-400">Memuat task...</p>}
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {COLUMNS.map((col) => {
+            const items = tasks.filter((t: any) => t.status === col.key);
             return (
-              <div key={status} className="bg-slate-100 rounded-lg p-3">
+              <div
+                key={col.key}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => handleDrop(col.key)}
+                className="bg-slate-50 rounded-lg p-3 min-h-[300px]"
+              >
                 <div className="flex justify-between items-center mb-3">
-                  <h3 className="font-semibold text-sm">{status.replace('_', ' ')}</h3>
-                  <Badge variant="secondary">{items.length}</Badge>
+                  <h3 className={`font-bold text-sm border-l-4 pl-2 ${col.accent}`}>
+                    {col.label}
+                  </h3>
+                  <span className="text-xs text-slate-500">{items.length}</span>
                 </div>
                 <div className="space-y-2">
-                  {items.map((t: any) => (
-                    <Card key={t.id}>
-                      <CardContent className="p-3 space-y-2">
-                        <p className="font-medium text-sm">{t.title}</p>
-                        <div className="flex gap-1 flex-wrap">
-                          <Badge variant="outline" className="text-xs">{t.department}</Badge>
-                          <Badge
-                            variant={t.priority === 'HIGH' ? 'destructive' : 'secondary'}
-                            className="text-xs"
-                          >
-                            {t.priority}
-                          </Badge>
-                          {t.isClientVisible && (
-                            <Badge variant="outline" className="text-xs">Client</Badge>
-                          )}
-                        </div>
-                        {t.assignee && (
-                          <p className="text-xs text-slate-500">👤 {t.assignee.name}</p>
-                        )}
-                        {t.displayStatus === 'BLOCKED' && (
-                          <p className="text-xs text-red-600 flex items-center gap-1">
-                            <Lock size={12} />
-                            {t.dependencies
-                              ?.filter((d: any) => d.dependsOnTask.status !== 'DONE')
-                              .map((d: any) => d.dependsOnTask.title)
-                              .join(', ')}
-                          </p>
-                        )}
-                      </CardContent>
-                    </Card>
-                  ))}
+                  {items.map((t: any) => {
+                    const isAssignee = t.assigneeId === user?.id;
+                    const draggable = isAssignee && !t.isBlocked;
+                    return (
+                      <TaskCard
+                        key={t.id}
+                        task={t}
+                        draggable={draggable}
+                        onDragStart={() => setDragId(t.id)}
+                        showDependencyHint
+                        canEdit={isPM}
+                        onEdit={() => setEditTask(t)}
+                        onDelete={isPM ? () => handleDeleteTask(t.id) : undefined}
+                      />
+                    );
+                  })}
                   {items.length === 0 && (
-                    <p className="text-xs text-slate-400 text-center py-4">Kosong</p>
+                    <p className="text-xs text-slate-400 text-center py-6">Kosong</p>
                   )}
                 </div>
               </div>
             );
           })}
         </div>
+
+        <Pagination
+          page={meta?.page || 1}
+          totalPages={meta?.totalPages || 1}
+          total={meta?.total || 0}
+          onChange={setPage}
+        />
+
+        {isPM && project && (
+          <>
+            <ProjectDialog
+              open={editProject}
+              onOpenChange={setEditProject}
+              projectId={project.id}
+              initial={editInitial}
+            />
+            <TaskDialog
+              open={createTask}
+              onOpenChange={setCreateTask}
+              projectId={id}
+              allTasks={tasks}
+            />
+            {editTask && (
+              <TaskDialog
+                open={!!editTask}
+                onOpenChange={(v) => !v && setEditTask(null)}
+                projectId={id}
+                taskId={editTask.id}
+                allTasks={tasks}
+                initial={taskEditInitial}
+                version={editTask.version}
+              />
+            )}
+          </>
+        )}
       </div>
     </AppShell>
   );
