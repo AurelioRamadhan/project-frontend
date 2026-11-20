@@ -3,6 +3,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api } from '@/lib/api';
+import { getApiErrorMessage } from '@/lib/api-error';
 import { AppShell } from '@/components/layout/app-shell';
 import { Pagination } from '@/components/ui/pagination';
 import { TaskCard } from '@/components/ui/task-card';
@@ -33,7 +34,7 @@ export default function BoardPage() {
   });
   const projects = projectsData?.data || [];
 
-  const { data: taskData, isLoading } = useQuery({
+  const { data: taskData, isLoading, error: taskError } = useQuery({
     queryKey: [
       'tasks-global',
       page,
@@ -69,8 +70,15 @@ export default function BoardPage() {
       status: TaskStatus;
       version: number;
     }) => api.patch(`/api/tasks/${taskId}/status`, { status, version }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks-global'] }),
-    onError: (e: any) => alert(e.response?.data?.error || 'Gagal update status'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tasks-global'] });
+      qc.invalidateQueries({ queryKey: ['my-tasks'] });
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+      qc.invalidateQueries({ queryKey: ['audit-global'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
+    },
+    onError: (e: unknown) => alert(getApiErrorMessage(e, 'Gagal mengubah status')),
   });
 
   const handleDrop = (status: TaskStatus) => {
@@ -150,10 +158,11 @@ export default function BoardPage() {
           </select>
         </div>
 
-        {isLoading && <p className="text-slate-400">Memuat...</p>}
+        {isLoading && <p className="text-slate-400" role="status">Memuat task...</p>}
+        {taskError && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-3" role="alert">{getApiErrorMessage(taskError, 'Gagal memuat task.')}</p>}
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {COLUMNS.map((col) => {
+          {!isLoading && !taskError && COLUMNS.map((col) => {
             const items = tasks.filter((t: any) => t.status === col.key);
             return (
               <div

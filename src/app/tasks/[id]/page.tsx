@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useRouter } from 'next/navigation';
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
+import { getApiErrorMessage } from '@/lib/api-error';
 import { AppShell } from '@/components/layout/app-shell';
 import { useAuthStore } from '@/store/auth';
 import { Button } from '@/components/ui/button';
@@ -18,7 +19,7 @@ import {
   mimeLabel,
   previewUrl,
 } from '@/lib/attachments';
-import { colorFor, initials, formatDate, formatDateTime } from '@/lib/format';
+import { colorFor, initials, formatAuditColumn, formatAuditValue, formatDateTime } from '@/lib/format';
 import {
   ArrowLeft,
   Calendar,
@@ -89,8 +90,9 @@ function TaskDetailContent() {
     dependencyIds: [] as string[],
   });
 
-  const { data: task, isLoading } = useQuery({
+  const { data: task, isLoading, error: taskError } = useQuery({
     queryKey: ['task', id],
+    gcTime: 0,
     queryFn: async () => (await api.get(`/api/tasks/${id}`)).data,
   });
 
@@ -114,6 +116,12 @@ function TaskDetailContent() {
     },
     enabled: !!task?.projectId,
   });
+
+  useEffect(() => {
+    if (!msg) return;
+    const timeout = window.setTimeout(() => setMsg(''), 4000);
+    return () => window.clearTimeout(timeout);
+  }, [msg]);
 
   useEffect(() => {
     if (!task) return;
@@ -196,11 +204,16 @@ function TaskDetailContent() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['task', id] });
       qc.invalidateQueries({ queryKey: ['tasks'] });
+      qc.invalidateQueries({ queryKey: ['tasks-global'] });
+      qc.invalidateQueries({ queryKey: ['my-tasks'] });
+      qc.invalidateQueries({ queryKey: ['audit', id] });
+      qc.invalidateQueries({ queryKey: ['audit-global'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
       notify('Status berhasil diubah');
+      window.setTimeout(() => setMsg(''), 4000);
     },
-    onError: (e: any) =>
-      notify(e.response?.data?.error || 'Gagal ubah status', 'error'),
+    onError: (e: unknown) => notify(getApiErrorMessage(e, 'Gagal mengubah status'), 'error'),
   });
 
   const save = useMutation({
@@ -221,12 +234,8 @@ function TaskDetailContent() {
         assigneeId: form.assigneeId || null,
         dependencyIds: form.dependencyIds,
         version: task.version,
-        startDate: form.startDate
-          ? new Date(`${form.startDate}T00:00:00`).toISOString()
-          : null,
-        dueDate: form.dueDate
-          ? new Date(`${form.dueDate}T00:00:00`).toISOString()
-          : null,
+        startDate: form.startDate ? `${form.startDate}T00:00:00.000Z` : null,
+        dueDate: form.dueDate ? `${form.dueDate}T00:00:00.000Z` : null,
       };
 
       return api.put(`/api/tasks/${id}`, payload);
@@ -234,13 +243,16 @@ function TaskDetailContent() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['task', id] });
       qc.invalidateQueries({ queryKey: ['tasks'] });
+      qc.invalidateQueries({ queryKey: ['tasks-global'] });
+      qc.invalidateQueries({ queryKey: ['my-tasks'] });
+      qc.invalidateQueries({ queryKey: ['audit', id] });
+      qc.invalidateQueries({ queryKey: ['audit-global'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
       notify('Perubahan berhasil disimpan');
+      window.setTimeout(() => setMsg(''), 4000);
     },
-    onError: (e: any) =>
-      notify(
-        e.response?.data?.error || e.message || 'Gagal simpan',
-        'error'
-      ),
+    onError: (e: unknown) => notify(getApiErrorMessage(e, 'Gagal menyimpan perubahan'), 'error'),
   });
 
   const upload = useMutation({
@@ -253,10 +265,13 @@ function TaskDetailContent() {
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['attachments', id] });
       qc.invalidateQueries({ queryKey: ['task', id] });
+      qc.invalidateQueries({ queryKey: ['audit', id] });
+      qc.invalidateQueries({ queryKey: ['audit-global'] });
 
       if (fileRef.current) fileRef.current.value = '';
 
       notify(`${res.data.length} file berhasil diupload`);
+      window.setTimeout(() => setMsg(''), 4000);
     },
     onError: (e: any) =>
       notify(e.response?.data?.error || 'Gagal upload', 'error'),
@@ -298,14 +313,11 @@ function TaskDetailContent() {
     }
   };
 
-  if (isLoading || !task) {
-    return (
-      <AppShell>
-        <div className="max-w-5xl mx-auto p-6">
-          <p className="text-slate-400">Memuat task...</p>
-        </div>
-      </AppShell>
-    );
+  if (isLoading) {
+    return (<AppShell><div className="max-w-5xl mx-auto p-6" role="status">Memuat task...</div></AppShell>);
+  }
+  if (taskError || !task) {
+    return (<AppShell><div className="max-w-5xl mx-auto p-6" role="alert">{getApiErrorMessage(taskError, 'Task tidak ditemukan atau gagal dimuat.')} <Button variant="outline" onClick={() => router.back()}>Kembali</Button></div></AppShell>);
   }
 
   const isAssignee = task.assigneeId === user?.id;
@@ -348,6 +360,7 @@ function TaskDetailContent() {
     STATUS_OPTIONS[0];
 
   const resetForm = () => {
+    setMsg('');
     setForm({
       title: task.title,
       description: task.description || '',
@@ -368,7 +381,7 @@ function TaskDetailContent() {
 
   return (
     <AppShell>
-      <div className="max-w-6xl mx-auto py-6 px-4 space-y-6">
+      <div className="max-w-6xl mx-auto py-6 px-4 space-y-6" onClick={() => { if (msg) setMsg(''); }}>
 
         {/* Top bar */}
         <div className="flex items-center justify-between gap-3">
@@ -1120,7 +1133,9 @@ function TaskDetailContent() {
               </div>
 
               <div className="p-4">
-                {!logs?.length ? (
+                {logs === undefined ? (
+                  <p className="text-sm text-slate-400 text-center py-6" role="status">Memuat aktivitas...</p>
+                ) : !logs?.length ? (
                   <p className="text-sm text-slate-400 text-center py-6">
                     Belum ada aktivitas.
                   </p>
@@ -1140,19 +1155,19 @@ function TaskDetailContent() {
                         <p className="text-xs text-slate-500 mt-0.5">
                           Mengubah{' '}
                           <span className="font-mono text-indigo-600 bg-indigo-50 px-1 rounded">
-                            {l.changedColumn}
+                            {formatAuditColumn(l.changedColumn)}
                           </span>
                         </p>
 
                         <div className="mt-2 bg-slate-50 rounded-md p-2 space-y-1">
                           <p className="text-xs text-slate-400 break-words">
                             <span className="font-medium">Dari:</span>{' '}
-                            {l.oldValue || '(kosong)'}
+                            {formatAuditValue(l.changedColumn, l.oldValue)}
                           </p>
 
                           <p className="text-xs text-slate-600 break-words">
                             <span className="font-medium">Menjadi:</span>{' '}
-                            {l.newValue || '(kosong)'}
+                            {formatAuditValue(l.changedColumn, l.newValue)}
                           </p>
                         </div>
 

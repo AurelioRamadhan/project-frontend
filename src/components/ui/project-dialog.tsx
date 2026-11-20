@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { getApiErrorMessage } from '@/lib/api-error';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -31,11 +32,12 @@ const empty: ProjectFormValue = {
 interface Props {
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  onSaved?: () => void;
   projectId?: string;
   initial?: Partial<ProjectFormValue>;
 }
 
-export function ProjectDialog({ open, onOpenChange, projectId, initial }: Props) {
+export function ProjectDialog({ open, onOpenChange, projectId, initial, onSaved }: Props) {
   const qc = useQueryClient();
   const isEdit = !!projectId;
 
@@ -56,8 +58,8 @@ export function ProjectDialog({ open, onOpenChange, projectId, initial }: Props)
         name: form.name,
         description: form.description || undefined,
       };
-      if (form.startDate) payload.startDate = new Date(form.startDate).toISOString();
-      if (form.dueDate) payload.dueDate = new Date(form.dueDate).toISOString();
+      if (form.startDate) payload.startDate = `${form.startDate}T00:00:00.000Z`;
+      if (form.dueDate) payload.dueDate = `${form.dueDate}T00:00:00.000Z`;
       if (clientIds[0]) payload.clientId = clientIds[0];
       payload.memberIds = form.memberIds;
       return isEdit
@@ -65,20 +67,25 @@ export function ProjectDialog({ open, onOpenChange, projectId, initial }: Props)
         : api.post('/api/projects', payload);
     },
     onSuccess: () => {
+      onSaved?.();
+      save.reset();
       qc.invalidateQueries({ queryKey: ['projects'] });
       onOpenChange(false);
     },
-    onError: (e: any) =>
-      alert(e.response?.data?.error || (isEdit ? 'Gagal update' : 'Gagal membuat project')),
+    onError: () => undefined,
   });
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(nextOpen) => {
+      if (nextOpen) save.reset();
+      onOpenChange(nextOpen);
+    }}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isEdit ? 'Edit Project' : 'Create New Project'}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
+          {save.isError && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md p-3" role="alert">{getApiErrorMessage(save.error, isEdit ? 'Gagal update project.' : 'Gagal membuat project.')}</p>}
           <div>
             <Label>Project Name *</Label>
             <Input

@@ -7,7 +7,7 @@ import { AppShell } from '@/components/layout/app-shell';
 import { Card, CardContent } from '@/components/ui/card';
 import { Pagination } from '@/components/ui/pagination';
 import { Search } from 'lucide-react';
-import { formatDateTime } from '@/lib/format';
+import { formatAuditColumn, formatAuditValue, formatDateTime } from '@/lib/format';
 
 export default function ActivityPage() {
   const [projectId, setProjectId] = useState('ALL');
@@ -16,13 +16,13 @@ export default function ActivityPage() {
   const [page, setPage] = useState(1);
   const rows = 20;
 
-  const { data: projectsData } = useQuery({
+  const { data: projectsData, error: projectsError } = useQuery({
     queryKey: ['projects', 'activity'],
     queryFn: async () => (await api.get('/api/projects?rows=100')).data,
   });
   const projects = projectsData?.data || [];
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['audit-global', page, search, actorRole, projectId],
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -87,22 +87,24 @@ export default function ActivityPage() {
 
         <Card>
           <CardContent className="p-6 space-y-3">
-            {isLoading && <p className="text-slate-400">Memuat...</p>}
-            {logs.map((l: any) => (
+            {isLoading && <p className="text-slate-400" role="status">Memuat aktivitas...</p>}
+            {error && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-3" role="alert">Gagal memuat Activity Log. Periksa koneksi atau izin akses lalu coba lagi.</p>}
+            {projectsError && <p className="text-sm text-amber-700" role="alert">Daftar project gagal dimuat.</p>}
+            {!isLoading && !error && logs.map((l: any) => (
               <div key={l.id} className="border-l-2 border-blue-500 pl-3">
                 <p className="text-sm font-medium">
-                  {l.actor.name} · {l.changedColumn} · {l.task?.title}
+                  {l.actor.name} · {formatAuditColumn(l.changedColumn)} · {l.task?.title}
                 </p>
                 {l.task?.project && (
                   <p className="text-xs text-slate-400 mt-0.5">{l.task.project.name}</p>
                 )}
                 <p className="text-xs text-slate-500">
-                  {l.oldValue || '-'} → {l.newValue || '-'}
+                  {formatAuditValue(l.changedColumn, l.oldValue)} → {formatAuditValue(l.changedColumn, l.newValue)}
                 </p>
                 <p className="text-xs text-slate-400">{formatDateTime(l.timestamp)}</p>
               </div>
             ))}
-            {!isLoading && logs.length === 0 && (
+            {!isLoading && !error && logs.length === 0 && (
               <p className="text-slate-400">Belum ada aktivitas.</p>
             )}
           </CardContent>

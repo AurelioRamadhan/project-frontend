@@ -38,6 +38,7 @@ function ProjectDetailContent() {
 
   const [editProject, setEditProject] = useState(false);
   const [createTask, setCreateTask] = useState(false);
+  const [feedback, setFeedback] = useState('');
   const [editTask, setEditTask] = useState<any>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -84,7 +85,12 @@ function ProjectDetailContent() {
       version: number;
     }) => api.patch(`/api/tasks/${taskId}/status`, { status, version }),
     onSuccess: () => {
+      setFeedback('Status task berhasil diperbarui.');
       qc.invalidateQueries({ queryKey: ['tasks', id] });
+      qc.invalidateQueries({ queryKey: ['tasks-global'] });
+      qc.invalidateQueries({ queryKey: ['my-tasks'] });
+      qc.invalidateQueries({ queryKey: ['audit-global'] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
     },
     onError: (e: any) => alert(e.response?.data?.error || 'Gagal ubah status'),
@@ -158,7 +164,8 @@ function ProjectDetailContent() {
               <p className="text-sm text-slate-400 mt-1">Client: {project.client.name}</p>
             )}
           </div>
-          {isPM && project && (
+          {feedback && <p className="text-sm rounded-md border border-emerald-200 bg-emerald-50 text-emerald-800 p-3" role="status">{feedback}</p>}
+        {isPM && project && (
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => setEditProject(true)}>
                 <Pencil size={16} className="mr-1" /> Edit Project
@@ -282,12 +289,14 @@ function ProjectDetailContent() {
               onOpenChange={setEditProject}
               projectId={project.id}
               initial={editInitial}
+              onSaved={() => setFeedback('Project berhasil diperbarui.')}
             />
             <TaskDialog
               open={createTask}
               onOpenChange={setCreateTask}
               projectId={id}
               allTasks={tasks}
+              onSaved={() => setFeedback('Task berhasil dibuat.')}
             />
             {editTask && (
               <TaskDialog
@@ -298,6 +307,7 @@ function ProjectDetailContent() {
                 allTasks={tasks}
                 initial={taskEditInitial}
                 version={editTask.version}
+                onSaved={() => setFeedback('Perubahan task berhasil disimpan.')}
               />
             )}
           </>

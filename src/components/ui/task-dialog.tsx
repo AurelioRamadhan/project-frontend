@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { getApiErrorMessage } from '@/lib/api-error';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -35,6 +36,7 @@ const empty: TaskFormValue = {
 interface Props {
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  onSaved?: (kind: 'create' | 'edit') => void;
   projectId: string;
   taskId?: string;
   allTasks: any[];
@@ -45,6 +47,7 @@ interface Props {
 export function TaskDialog({
   open,
   onOpenChange,
+  onSaved,
   projectId,
   taskId,
   allTasks,
@@ -79,9 +82,9 @@ export function TaskDialog({
         assigneeId: assigneeIds[0] || null,
         dependencyIds: form.dependencyIds,
       };
-      if (form.startDate) payload.startDate = new Date(form.startDate).toISOString();
+      if (form.startDate) payload.startDate = `${form.startDate}T00:00:00.000Z`;
       else if (isEdit) payload.startDate = null;
-      if (form.dueDate) payload.dueDate = new Date(form.dueDate).toISOString();
+      if (form.dueDate) payload.dueDate = `${form.dueDate}T00:00:00.000Z`;
       else if (isEdit) payload.dueDate = null;
       if (isEdit && version !== undefined) payload.version = version;
 
@@ -90,22 +93,31 @@ export function TaskDialog({
         : api.post(`/api/tasks/project/${projectId}`, payload);
     },
     onSuccess: () => {
+      onSaved?.(isEdit ? 'edit' : 'create');
+      save.reset();
       qc.invalidateQueries({ queryKey: ['tasks', projectId] });
       qc.invalidateQueries({ queryKey: ['task', taskId] });
+      qc.invalidateQueries({ queryKey: ['tasks-global'] });
+      qc.invalidateQueries({ queryKey: ['my-tasks'] });
+      qc.invalidateQueries({ queryKey: ['audit-global'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
       onOpenChange(false);
     },
-    onError: (e: any) =>
-      alert(e.response?.data?.error || (isEdit ? 'Gagal update task' : 'Gagal membuat task')),
+    onError: () => undefined,
   });
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(nextOpen) => {
+      if (nextOpen) save.reset();
+      onOpenChange(nextOpen);
+    }}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isEdit ? 'Edit Task' : 'Create New Task'}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
+          {save.isError && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md p-3" role="alert">{getApiErrorMessage(save.error, isEdit ? 'Gagal update task.' : 'Gagal membuat task.')}</p>}
           <div>
             <Label>Task Title *</Label>
             <Input
